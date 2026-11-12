@@ -1,0 +1,4 @@
+.secrets/
+cloud/out/
+cloud/node_modules/
+*.log
