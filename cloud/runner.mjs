@@ -133,6 +133,9 @@ async function main() {
     log('session lost (' + why + ')');
     for (let round = 0; round < 3; round++) {
       await page.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded' }).catch(() => {});
+      const host = (() => { try { return new URL(page.url()).host; } catch { return '?'; } })();
+      const ttl = await page.title().catch(() => '');
+      log('login page host=' + host + ' title=' + String(ttl).slice(0, 40));
       for (let i = 0; i < 20; i++) {
         await sleep(3000);
         if (await apiStatus('fishing/current') === 200) { log('session restored'); return true; }
