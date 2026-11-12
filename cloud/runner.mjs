@@ -133,10 +133,23 @@ async function main() {
     log('session lost (' + why + ')');
     for (let round = 0; round < 3; round++) {
       await page.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded' }).catch(() => {});
+      await sleep(2500);
       const host = (() => { try { return new URL(page.url()).host; } catch { return '?'; } })();
-      const ttl = await page.title().catch(() => '');
-      log('login page host=' + host + ' title=' + String(ttl).slice(0, 40));
-      for (let i = 0; i < 20; i++) {
+      log('login page host=' + host);
+      if (host !== 'fish.pipiwangcom.com') {
+        const clicked = await page.evaluate(() => {
+          const want = /授权|同意|允许|进入|继续|确认|登录/;
+          const els = [...document.querySelectorAll('button,a,[role="button"],input[type="submit"]')];
+          for (const e of els) {
+            const t = String(e.innerText || e.value || '').trim();
+            if (t && want.test(t)) { e.click(); return t.slice(0, 20); }
+          }
+          return '';
+        }).catch(() => '');
+        log('click ' + (clicked || 'none'));
+        await sleep(4000);
+      }
+      for (let i = 0; i < 15; i++) {
         await sleep(3000);
         if (await apiStatus('fishing/current') === 200) { log('session restored'); return true; }
       }
