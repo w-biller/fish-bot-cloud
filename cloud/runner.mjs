@@ -182,6 +182,15 @@ async function main() {
     if (await apiStatus('fishing/current') === 200) return true;
     log('session lost (' + why + ')');
     for (let round = 0; round < 3; round++) {
+      try {
+        await page.goto('https://img.pipiwangcom.com/api/v1/auth/linuxdo/login', { waitUntil: 'domcontentloaded', timeout: 45000 });
+        for (let i = 0; i < 12; i++) {
+          await sleep(3000);
+          const h = (() => { try { const u = new URL(page.url()); return u.host + u.pathname.slice(0, 32); } catch { return '?'; } })();
+          log('oauth ' + h);
+          if (h.startsWith('img.pipiwangcom.com/') && !h.includes('/api/')) break;
+        }
+      } catch (e) { log('oauth fail ' + String(e.message).slice(0, 60)); }
       await page.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded' }).catch(() => {});
       await sleep(2500);
       const host = (() => { try { return new URL(page.url()).host; } catch { return '?'; } })();
