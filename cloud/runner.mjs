@@ -151,22 +151,26 @@ async function main() {
   };
 
   const clickAuth = async () => {
-    const want = /登录|授权|同意|允许|进入|继续|确认/;
-    try {
-      const loc = page.getByRole('button', { name: want }).or(page.getByRole('link', { name: want })).first();
-      if (await loc.count()) {
-        const label = String(await loc.innerText().catch(() => '')).slice(0, 20);
-        await loc.click({ timeout: 6000 }).catch(() => {});
-        log('click pw ' + label);
-        return true;
-      }
-    } catch { }
+    const order = [/重新授权/, /授权/, /同意|允许/, /继续|确认/, /登录/];
+    for (const re of order) {
+      try {
+        const loc = page.getByRole('button', { name: re }).or(page.getByRole('link', { name: re })).first();
+        if (await loc.count()) {
+          const label = String(await loc.innerText().catch(() => '')).slice(0, 20);
+          await loc.click({ timeout: 6000 }).catch(() => { });
+          log('click pw ' + label);
+          return true;
+        }
+      } catch { }
+    }
     const t = await page.evaluate(() => {
-      const w = /登录|授权|同意|允许|进入|继续|确认/;
+      const w = [/重新授权/, /授权/, /同意|允许/, /进入|继续|确认/, /登录/];
       const els = [...document.querySelectorAll('button,a,[role="button"],input[type="submit"]')];
-      for (const e of els) {
-        const s = String(e.innerText || e.value || '').trim();
-        if (s && w.test(s)) { e.click(); return s.slice(0, 20); }
+      for (const re of w) {
+        for (const e of els) {
+          const s = String(e.innerText || e.value || '').trim();
+          if (s && re.test(s)) { e.click(); return s.slice(0, 20); }
+        }
       }
       return '';
     }).catch(() => '');
