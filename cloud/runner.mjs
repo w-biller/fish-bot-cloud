@@ -128,6 +128,30 @@ async function main() {
     }
   };
 
+  const clickAuth = async () => {
+    const want = /登录|授权|同意|允许|进入|继续|确认/;
+    try {
+      const loc = page.getByRole('button', { name: want }).or(page.getByRole('link', { name: want })).first();
+      if (await loc.count()) {
+        const label = String(await loc.innerText().catch(() => '')).slice(0, 20);
+        await loc.click({ timeout: 6000 }).catch(() => {});
+        log('click pw ' + label);
+        return true;
+      }
+    } catch { }
+    const t = await page.evaluate(() => {
+      const w = /登录|授权|同意|允许|进入|继续|确认/;
+      const els = [...document.querySelectorAll('button,a,[role="button"],input[type="submit"]')];
+      for (const e of els) {
+        const s = String(e.innerText || e.value || '').trim();
+        if (s && w.test(s)) { e.click(); return s.slice(0, 20); }
+      }
+      return '';
+    }).catch(() => '');
+    log('click js ' + (t || 'none'));
+    return !!t;
+  };
+
   const ensureLogin = async why => {
     if (await apiStatus('fishing/current') === 200) return true;
     log('session lost (' + why + ')');
@@ -137,17 +161,14 @@ async function main() {
       const host = (() => { try { return new URL(page.url()).host; } catch { return '?'; } })();
       log('login page host=' + host);
       if (host !== 'fish.pipiwangcom.com') {
-        const clicked = await page.evaluate(() => {
-          const want = /授权|同意|允许|进入|继续|确认|登录/;
-          const els = [...document.querySelectorAll('button,a,[role="button"],input[type="submit"]')];
-          for (const e of els) {
-            const t = String(e.innerText || e.value || '').trim();
-            if (t && want.test(t)) { e.click(); return t.slice(0, 20); }
-          }
-          return '';
-        }).catch(() => '');
-        log('click ' + (clicked || 'none'));
-        await sleep(4000);
+        await clickAuth();
+        for (let k = 0; k < 6; k++) {
+          await sleep(4000);
+          const hs = (() => { try { return new URL(page.url()).host; } catch { return '?'; } })();
+          log('after click ' + hs);
+          if (hs === 'fish.pipiwangcom.com') break;
+          if (k === 2) await clickAuth();
+        }
       }
       for (let i = 0; i < 15; i++) {
         await sleep(3000);
