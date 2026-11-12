@@ -181,16 +181,7 @@ async function main() {
   const ensureLogin = async why => {
     if (await apiStatus('fishing/current') === 200) return true;
     log('session lost (' + why + ')');
-    for (let round = 0; round < 3; round++) {
-      try {
-        await page.goto('https://img.pipiwangcom.com/api/v1/auth/linuxdo/login', { waitUntil: 'domcontentloaded', timeout: 45000 });
-        for (let i = 0; i < 12; i++) {
-          await sleep(3000);
-          const h = (() => { try { const u = new URL(page.url()); return u.host + u.pathname.slice(0, 32); } catch { return '?'; } })();
-          log('oauth ' + h);
-          if (h.startsWith('img.pipiwangcom.com/') && !h.includes('/api/')) break;
-        }
-      } catch (e) { log('oauth fail ' + String(e.message).slice(0, 60)); }
+    for (let round = 0; round < 2; round++) {
       await page.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded' }).catch(() => {});
       await sleep(2500);
       const host = (() => { try { return new URL(page.url()).host; } catch { return '?'; } })();
@@ -198,21 +189,29 @@ async function main() {
       if (host !== 'fish.pipiwangcom.com') {
         await dumpAuth();
         await clickAuth();
-        for (let k = 0; k < 6; k++) {
-          await sleep(4000);
-          const hs = (() => { try { return new URL(page.url()).host; } catch { return '?'; } })();
-          const urls = context.pages().map(p => { try { return new URL(p.url()).href.slice(0, 90); } catch { return '?'; } });
-          log('after click ' + hs + ' pages=' + urls.length + ' ' + JSON.stringify(urls.slice(-2)));
-          if (hs === 'fish.pipiwangcom.com') break;
-          if (k === 2) await clickAuth();
-        }
+        await sleep(4000);
       }
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 12; i++) {
         await sleep(3000);
         if (await apiStatus('fishing/current') === 200) { log('session restored'); return true; }
       }
       log('retry login ' + (round + 1));
     }
+    try {
+      log('fallback oauth');
+      await page.goto('https://img.pipiwangcom.com/api/v1/auth/linuxdo/login', { waitUntil: 'domcontentloaded', timeout: 45000 });
+      for (let i = 0; i < 8; i++) {
+        await sleep(3000);
+        const h = (() => { try { const u = new URL(page.url()); return u.host + u.pathname.slice(0, 32); } catch { return '?'; } })();
+        log('oauth ' + h);
+        if (h.startsWith('img.pipiwangcom.com/') && !h.includes('/api/')) break;
+      }
+      await page.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded' }).catch(() => {});
+      for (let i = 0; i < 10; i++) {
+        await sleep(3000);
+        if (await apiStatus('fishing/current') === 200) { log('session restored'); return true; }
+      }
+    } catch (e) { log('oauth fail ' + String(e.message).slice(0, 60)); }
     return false;
   };
 
