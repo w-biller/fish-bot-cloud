@@ -40,7 +40,8 @@ async function main() {
   try {
     if (!stateBlob) throw new Error('no state');
     state = JSON.parse(decrypt(stateBlob.trim(), key));
-    log('state ok (' + stateFrom + ') cookies ' + (state.cookies || []).length + ' origins ' + (state.origins || []).length);
+    if (state && state.ok === false) { log('state stale, ignore'); state = null; stateFrom = 'stale'; }
+    else log('state ok (' + stateFrom + ') cookies ' + (state.cookies || []).length + ' origins ' + (state.origins || []).length);
   } catch (e) {
     log('state unusable', e.message);
   }
@@ -130,10 +131,13 @@ async function main() {
   const ensureLogin = async why => {
     if (await apiStatus('fishing/current') === 200) return true;
     log('session lost (' + why + ')');
-    await page.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded' }).catch(() => {});
-    for (let i = 0; i < 20; i++) {
-      await sleep(3000);
-      if (await apiStatus('fishing/current') === 200) { log('session restored'); return true; }
+    for (let round = 0; round < 3; round++) {
+      await page.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded' }).catch(() => {});
+      for (let i = 0; i < 20; i++) {
+        await sleep(3000);
+        if (await apiStatus('fishing/current') === 200) { log('session restored'); return true; }
+      }
+      log('retry login ' + (round + 1));
     }
     return false;
   };
@@ -157,9 +161,20 @@ async function main() {
   let reloads = 0;
   let lastCasts = -1;
   let stallSince = 0;
+  let lastAuthCheck = Date.now();
+  let loginOk = true;
 
   while (Date.now() < wrapAt) {
     await sleep(60000);
+
+    if (Date.now() - lastAuthCheck > 10 * 60000) {
+      lastAuthCheck = Date.now();
+      if (await apiStatus('fishing/current') !== 200) {
+        if (!(await ensureLogin('hb'))) { loginOk = false; log('login unrecoverable'); break; }
+        await inject('after-login');
+        continue;
+      }
+    }
 
     const st = await page.evaluate(() => {
       const b = window.__fishBot;
@@ -220,6 +235,7 @@ async function main() {
   }
 
   log('wrap up');
+  if (await apiStatus('fishing/current') !== 200) loginOk = false;
   await page.evaluate(() => { try { window.__fishBot?.stop('done'); } catch { } }).catch(() => {});
   await sleep(25000);
 
@@ -241,7 +257,7 @@ async function main() {
     if (Array.isArray(newState.cookies)) {
       newState.cookies = newState.cookies.filter(c => /pipiwang|linux\.do/.test(c.domain));
     }
-    const enc = encrypt(JSON.stringify(newState), key);
+    const enc = encrypt(JSON.stringify({ ...newState, ok: loginOk }), key);
     fs.writeFileSync(path.join(OUT_DIR, 'state.enc'), enc);
     log('state saved', enc.length);
 
@@ -258,6 +274,7 @@ async function main() {
   }
 
   await browser.close();
+  if (!loginOk) { log('done, login lost'); process.exit(2); }
   log('done');
 }
 
