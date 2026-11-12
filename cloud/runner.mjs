@@ -72,6 +72,13 @@ async function main() {
   });
 
   const page = await context.newPage();
+  context.on('page', p => { try { log('new page ' + new URL(p.url()).href.slice(0, 90)); } catch { } });
+  page.on('request', r => {
+    try {
+      const u = r.url();
+      if (/oauth|passport|\/login|\/sso|authorize/i.test(u)) log('req ' + r.method() + ' ' + u.slice(0, 110));
+    } catch { }
+  });
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   }).catch(() => {});
@@ -128,6 +135,21 @@ async function main() {
     }
   };
 
+  const dumpAuth = async () => {
+    try {
+      const info = await page.evaluate(() => {
+        const els = [...document.querySelectorAll('button,a,[role="button"],input[type="submit"]')];
+        return els.map(e => ({
+          t: String(e.innerText || e.value || '').trim().slice(0, 16),
+          tag: e.tagName,
+          href: String(e.getAttribute('href') || '').slice(0, 80),
+          oc: String(e.getAttribute('onclick') || '').slice(0, 40),
+        })).filter(x => x.t).slice(0, 10);
+      });
+      log('dom ' + JSON.stringify(info));
+    } catch { log('dom fail'); }
+  };
+
   const clickAuth = async () => {
     const want = /登录|授权|同意|允许|进入|继续|确认/;
     try {
@@ -161,11 +183,13 @@ async function main() {
       const host = (() => { try { return new URL(page.url()).host; } catch { return '?'; } })();
       log('login page host=' + host);
       if (host !== 'fish.pipiwangcom.com') {
+        await dumpAuth();
         await clickAuth();
         for (let k = 0; k < 6; k++) {
           await sleep(4000);
           const hs = (() => { try { return new URL(page.url()).host; } catch { return '?'; } })();
-          log('after click ' + hs);
+          const urls = context.pages().map(p => { try { return new URL(p.url()).href.slice(0, 90); } catch { return '?'; } });
+          log('after click ' + hs + ' pages=' + urls.length + ' ' + JSON.stringify(urls.slice(-2)));
           if (hs === 'fish.pipiwangcom.com') break;
           if (k === 2) await clickAuth();
         }
