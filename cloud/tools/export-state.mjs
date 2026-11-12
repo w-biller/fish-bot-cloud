@@ -39,43 +39,50 @@ function toPW(c) {
 
 async function main() {
   const targets = await getJSON(`${CDP}/json`).catch(() => { throw new Error('no cdp'); });
-  const page = targets.find(t => t.type === 'page' && t.url.includes('fish.pipiwangcom.com'));
-  if (!page) throw new Error('no page');
+  const pages = targets.filter(t => t.type === 'page' && t.url.includes('pipiwangcom.com'));
+  if (!pages.length) throw new Error('no page');
 
-  const { open, send, ws } = cdpClient(page.webSocketDebuggerUrl);
-  await open;
-  await send('Network.enable').catch(() => { });
-  const { cookies } = await send('Network.getAllCookies');
+  let cookies = [];
+  const byOrigin = new Map();
+  for (const p of pages) {
+    try {
+      const { open, send, ws } = cdpClient(p.webSocketDebuggerUrl);
+      await open;
+      if (!cookies.length) {
+        await send('Network.enable').catch(() => { });
+        const r = await send('Network.getAllCookies');
+        cookies = r.cookies || [];
+      }
+      const lr = await send('Runtime.evaluate', {
+        expression: `JSON.stringify(Object.fromEntries(Object.keys(localStorage).map(k => [k, localStorage.getItem(k)])))`,
+        returnByValue: true,
+      });
+      ws.close();
+      const origin = new URL(p.url).origin;
+      const obj = JSON.parse(lr.result?.value || '{}');
+      byOrigin.set(origin, [{ origin, localStorage: Object.entries(obj).map(([name, value]) => ({ name, value })) }][0]);
+      console.log('origin', origin, 'items', Object.keys(obj).length);
+    } catch (e) {
+      console.log('origin skip', String(e.message).slice(0, 50));
+    }
+  }
 
   const ALLOW = (process.env.FISH_COOKIE_DOMAINS || 'pipiwangcom.com,linux.do')
     .split(',').map(s => s.trim()).filter(Boolean);
   const keep = cookies.filter(c => ALLOW.some(d => c.domain === d || c.domain.endsWith('.' + d.replace(/^\./, '')) || c.domain.replace(/^\./, '').endsWith(d)));
 
-  const lr = await send('Runtime.evaluate', {
-    expression: `JSON.stringify(Object.fromEntries(Object.keys(localStorage).map(k => [k, localStorage.getItem(k)])))`,
-    returnByValue: true,
-  });
-  const lsObj = JSON.parse(lr.result?.value || '{}');
-  const origin = new URL(page.url).origin;
-  const state = {
-    cookies: keep.map(toPW),
-    origins: [{
-      origin,
-      localStorage: Object.entries(lsObj).map(([name, value]) => ({ name, value })),
-    }],
-  };
-  ws.close();
+  const state = { cookies: keep.map(toPW), origins: [...byOrigin.values()] };
 
   let keyB64 = process.env.FISH_BOT_KEY;
   if (!keyB64) { keyB64 = genKey(); console.log(keyB64); }
 
-  const enc = encrypt(JSON.stringify(state), loadKey(keyB64));
+  const enc = encrypt(JSON.stringify({ ...state, ok: true }), loadKey(keyB64));
 
   const outDir = path.resolve('out');
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(path.join(outDir, 'state.enc'), enc);
 
-  console.log('ok', state.cookies.length, state.origins[0].localStorage.length, enc.length);
+  console.log('ok', state.cookies.length, state.origins.map(o => o.localStorage.length).join('/'), enc.length);
 }
 
 main().catch(e => { console.error('failed', e.message); process.exit(1); });
