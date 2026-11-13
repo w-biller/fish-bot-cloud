@@ -314,13 +314,30 @@ async function main() {
 
   const summary = await page.evaluate(() => {
     const s = window.__fishBot?.stats;
-    if (!s) return null;
-    return {
-      casts: s.casts, caught: s.caught, lost: s.escaped, coins: s.coins,
-      stocked: s.stocked, released: s.released, bred: s.bred, errors: s.errors,
-      lastError: s.lastError, today: Number(localStorage.getItem('fwb_castsToday') || 0),
+    let cl = [];
+    try { cl = JSON.parse(localStorage.getItem('fwb_catchLog') || '[]'); } catch { }
+    const byRarity = {};
+    const byName = {};
+    for (const e of cl) {
+      const r = Number(e.rarity || 0);
+      byRarity[r] = (byRarity[r] || 0) + 1;
+      const n = String(e.name || '?');
+      byName[n] = (byName[n] || 0) + 1;
+    }
+    const top = Object.entries(byName).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const out = {
+      catchN: cl.length,
+      byRarity,
+      top,
+      today: Number(localStorage.getItem('fwb_castsToday') || 0),
       rt: localStorage.getItem('fwb_runtimeToday'),
     };
+    if (s) Object.assign(out, {
+      casts: s.casts, caught: s.caught, lost: s.escaped, coins: s.coins,
+      stocked: s.stocked, released: s.released, bred: s.bred, errors: s.errors,
+      lastError: s.lastError,
+    });
+    return out;
   }).catch(() => null);
   fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify({ summary, at: new Date().toISOString() }, null, 2));
   log('summary', JSON.stringify(summary));
