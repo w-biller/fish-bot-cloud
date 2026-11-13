@@ -13,6 +13,53 @@ const PAGE_LOG = process.env.PAGE_LOG === '1';
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+const PAPI = 'https://img.pipiwangcom.com';
+const PUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
+const hex = n => Array.from({ length: n }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
+
+async function papi(token, path, method = 'GET', body) {
+  const r = await fetch(PAPI + path, {
+    method,
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'User-Agent': PUA },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { }
+  return { status: r.status, json, text };
+}
+
+async function dailyTasks(token) {
+  try {
+    const c = await papi(token, '/api/v1/pc/checkin', 'POST', {});
+    if (c.status === 200 && c.json) log('task checkin already=' + c.json.already + ' granted=' + c.json.grantedPoints + ' total=' + c.json.checkinPoints);
+    else log('task checkin http=' + c.status);
+  } catch (e) { log('task checkin err ' + String(e.message).slice(0, 60)); }
+
+  try {
+    const st = await papi(token, '/api/v1/games/fruit-slots/state');
+    if (st.status !== 200 || !st.json) { log('task slots state http=' + st.status); return; }
+    let d = st.json;
+    const before = d.points;
+    let spins = 0, net = 0;
+    while (d.remainingToday > 0 && spins < 20 && d.nextRound) {
+      const round = d.nextRound;
+      const body = {
+        roundId: round.id, requestId: hex(32), clientSeed: hex(64),
+        commitment: round.commitment, rulesHash: round.rulesHash, signature: round.signature,
+      };
+      let r = await papi(token, '/api/v1/games/fruit-slots/draw', 'POST', body);
+      if (r.status === 429) { await sleep(4000); r = await papi(token, '/api/v1/games/fruit-slots/draw', 'POST', body); }
+      if (r.status !== 200 || !r.json) { log('task slots draw http=' + r.status); break; }
+      d = r.json;
+      const pts = d.result?.prize?.points ?? 0;
+      spins++; net += pts - 20;
+      if (d.remainingToday > 0) await sleep(2200);
+    }
+    log('task slots spins=' + spins + ' net=' + net + ' left=' + d.remainingToday + ' pts=' + before + '->' + d.points);
+  } catch (e) { log('task slots err ' + String(e.message).slice(0, 60)); }
+}
+
 function must(name) {
   const v = process.env[name];
   if (!v) throw new Error('missing env ' + name);
@@ -227,6 +274,10 @@ async function main() {
 
   await inject('boot');
   await sleep(5000);
+
+  const ptoken = (state?.origins?.find(o => o.origin.includes('img'))?.localStorage || []).find(i => i.name === 'pipi_pc_token')?.value || '';
+  if (ptoken) await dailyTasks(ptoken);
+  else log('no parent token, skip tasks');
 
   const deadline = Date.now() + MAX_MINUTES * 60000;
   const wrapUpMin = Math.max(1, Math.min(WRAP_UP_BEFORE_MIN, Math.floor(MAX_MINUTES / 3)));
