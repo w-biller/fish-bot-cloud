@@ -386,7 +386,7 @@ async function main() {
     if (s) Object.assign(out, {
       casts: s.casts, caught: s.caught, lost: s.escaped, coins: s.coins,
       stocked: s.stocked, released: s.released, bred: s.bred, errors: s.errors,
-      lastError: s.lastError,
+      lastError: s.lastError, peak: s.peak || 0,
     });
     return out;
   }).catch(() => null);
