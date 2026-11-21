@@ -286,6 +286,7 @@ async function main() {
   let lastCasts = -1;
   let stallSince = 0;
   let lastAuthCheck = Date.now();
+  let lastRenew = Date.now();
   let loginOk = true;
 
   while (Date.now() < wrapAt) {
@@ -329,6 +330,19 @@ async function main() {
     let info = {};
     try { info = JSON.parse(st); } catch { }
     log('hb run=' + info.running + ' today=' + info.today + ' sess=' + info.casts + ' ok=' + info.caught + ' lost=' + info.lost + ' t=' + info.rt);
+
+    // 会话主动续期: 渔场会话约 3h 过期, bridge 只在会话仍有效时才能续。
+    // 每 2h 用独立后台页访问 /auth/start, 在到期前续上, 断链就不会发生。
+    if (Date.now() - lastRenew > 120 * 60000) {
+      lastRenew = Date.now();
+      try {
+        const p2 = await context.newPage();
+        await p2.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+        await sleep(9000);
+        await p2.close().catch(() => {});
+        log('session renewed (proactive)');
+      } catch (e) { log('renew fail ' + String(e.message).slice(0, 60)); }
+    }
 
     if (info.running === false) {
       if (info.stopType === 'final') {
