@@ -13,6 +13,19 @@ const PAGE_LOG = process.env.PAGE_LOG === '1';
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// 可外置配置: GitHub Variables(LOCK_TOP_MAP/LOW_MAP_MIN_CAP/MAX_CASTS_PER_DAY/DAILY_RUNTIME_MIN/REED_BAIT_MIN)
+// 改参数不用再重新加密推送脚本
+function cfgOverrides() {
+  const o = {};
+  const num = (k, name) => { const v = process.env[name]; if (v !== undefined && !isNaN(Number(v))) o[k] = Number(v); };
+  if (process.env.LOCK_TOP_MAP !== undefined) o.lockTopMap = process.env.LOCK_TOP_MAP === 'true';
+  num('lowMapMinCap', 'LOW_MAP_MIN_CAP');
+  num('maxCastsPerDay', 'MAX_CASTS_PER_DAY');
+  num('dailyRuntimeMin', 'DAILY_RUNTIME_MIN');
+  num('reedBaitMin', 'REED_BAIT_MIN');
+  return o;
+}
+
 const PAPI = 'https://img.pipiwangcom.com';
 const PUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 const hex = n => Array.from({ length: n }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
@@ -175,6 +188,14 @@ async function main() {
       const err = r?.exceptionDetails;
       if (err) { log('inject(' + why + ') failed', String(err.text || '').slice(0, 120)); return false; }
       log('inject(' + why + ') ok');
+      const _ov = cfgOverrides();
+      if (Object.keys(_ov).length) {
+        await s.send('Runtime.evaluate', {
+          expression: 'try{Object.assign(window.__fishBot.CFG,' + JSON.stringify(_ov) + ')}catch(e){}',
+          returnByValue: true,
+        });
+        log('cfg overrides applied', JSON.stringify(_ov));
+      }
       return true;
     } catch (e) {
       log('inject(' + why + ') error', String(e.message).slice(0, 120));
@@ -244,21 +265,8 @@ async function main() {
       }
       log('retry login ' + (round + 1));
     }
-    try {
-      log('fallback oauth');
-      await page.goto('https://img.pipiwangcom.com/api/v1/auth/linuxdo/login', { waitUntil: 'domcontentloaded', timeout: 45000 });
-      for (let i = 0; i < 8; i++) {
-        await sleep(3000);
-        const h = (() => { try { const u = new URL(page.url()); return u.host + u.pathname.slice(0, 32); } catch { return '?'; } })();
-        log('oauth ' + h);
-        if (h.startsWith('img.pipiwangcom.com/') && !h.includes('/api/')) break;
-      }
-      await page.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded' }).catch(() => {});
-      for (let i = 0; i < 10; i++) {
-        await sleep(3000);
-        if (await apiStatus('fishing/current') === 200) { log('session restored'); return true; }
-      }
-    } catch (e) { log('oauth fail ' + String(e.message).slice(0, 60)); }
+    // linux.do OAuth 兜底已移除: connect.linux.do 被 CF 挡死(2026-11-18 实测), 每次失败白等 2 分钟
+    log('login unrecoverable this round');
     return false;
   };
 
@@ -306,6 +314,7 @@ async function main() {
       if (!b) return 'missing';
       return JSON.stringify({
         running: b.stats.running,
+        inCast: b.inCast === true,
         stopType: b.stats.stopType || '',
         casts: b.stats.casts,
         caught: b.stats.caught,
@@ -333,15 +342,21 @@ async function main() {
 
     // 会话主动续期: 渔场会话约 3h 过期, bridge 只在会话仍有效时才能续。
     // 每 2h 用独立后台页访问 /auth/start, 在到期前续上, 断链就不会发生。
+    // 时机安全: 只在未处于搏鱼(inCast=false)时执行; 续期后校验会话有效性。
     if (Date.now() - lastRenew > 120 * 60000) {
-      lastRenew = Date.now();
-      try {
-        const p2 = await context.newPage();
-        await p2.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
-        await sleep(9000);
-        await p2.close().catch(() => {});
-        log('session renewed (proactive)');
-      } catch (e) { log('renew fail ' + String(e.message).slice(0, 60)); }
+      if (info.inCast) { log('renew deferred (in cast)'); }
+      else {
+        lastRenew = Date.now();
+        try {
+          const p2 = await context.newPage();
+          await p2.goto(SITE.replace(/\/$/, '') + '/auth/start', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+          await sleep(9000);
+          await p2.close().catch(() => {});
+          const v = await apiStatus('fishing/current');
+          if (v === 200) log('session renewed (proactive), verified');
+          else { log('renew verify failed, status=' + v); await ensureLogin('after-renew'); }
+        } catch (e) { log('renew fail ' + String(e.message).slice(0, 60)); }
+      }
     }
 
     if (info.running === false) {
@@ -401,13 +416,17 @@ async function main() {
       casts: s.casts, caught: s.caught, lost: s.escaped, coins: s.coins,
       stocked: s.stocked, released: s.released, bred: s.bred, errors: s.errors,
       lastError: s.lastError, peak: s.peak || 0, diffPeak: s.diffPeak || {},
+      diffCount: s.diffCount || {}, errKinds: s.errKinds || {}, escapeLog: s.escapeLog || [],
     });
     return out;
   }).catch(() => null);
   fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify({ summary, at: new Date().toISOString() }, null, 2));
   log('summary', JSON.stringify(summary));
 
-  try {
+  if (!loginOk) {
+    // 登录失败的 run 不写缓存: 坏缓存会挡住好的 Secret 种子(2026-11-21 实锤)
+    log('skip save (login failed, cache/seed untouched)');
+  } else try {
     const newState = await context.storageState();
     if (Array.isArray(newState.cookies)) {
       newState.cookies = newState.cookies.filter(c => /pipiwang|linux\.do/.test(c.domain));
