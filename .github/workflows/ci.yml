@@ -101,4 +101,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          gh issue create --title "run failed $(date '+%Y-%m-%d %H:%M')" --body "$RUN_URL" || true
+          TITLE="run failed $(date '+%Y-%m-%d')"
+          EXISTING=$(gh issue list --state open --search "run failed in:title" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "再次失败: $RUN_URL"
+          else
+            gh issue create --title "$TITLE" --body "$RUN_URL" || true
+          fi
